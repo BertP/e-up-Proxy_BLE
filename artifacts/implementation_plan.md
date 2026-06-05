@@ -1,44 +1,57 @@
-# Implementation Plan — Migration to ESP32-C6 Target Hardware
+# [Goal Description]
 
-We are migrating the e-up!Proxy firmware to support the **ESP32-C6** as the sole target hardware. This involves updating the PlatformIO configuration, cleaning up legacy ESP32-WROOM-32 configurations, and ensuring all ESP32-C6 specific initializations (like RF switch/ceramic antenna pins) are active.
+The user has reconfigured the WiCAN OBD2 dongle to `BLE+Station` mode. This enables a major architectural shift for the `e-up!Proxy`: Instead of the ESP32 dynamically switching its Wi-Fi connection between the car's dongle and the home network, it can now connect to the Home Wi-Fi and the WiCAN dongle via **BLE (Bluetooth Low Energy)** simultaneously.
+
+This plan outlines the required updates to `SPEC.md` before any code changes are made.
+
+> [!IMPORTANT]
+> **Major Architectural Change:** Moving to BLE means we can eliminate the complex Wi-Fi state switching. The proxy can maintain a persistent MQTT connection while polling OBD data over BLE.
+
+## User Review Required
+
+Please review the proposed architectural changes to the state machine and communication protocols. 
+
+> [!WARNING]
+> BLE communication on the ESP32 can be memory-intensive. We need to ensure that running both the BLE stack and the Wi-Fi/WebServer/MQTT stack concurrently does not exceed the available heap memory.
+
+## Open Questions
+
+> [!IMPORTANT]
+> 1. **BLE Protocol Details:** Does the WiCAN dongle emulate a standard serial port over BLE (e.g., using the Nordic UART Service - NUS) or does it have a custom GATT service/characteristic for sending and receiving ELM327 commands?
+> 2. **State Machine:** Do we completely remove the local LittleFS data buffering queue, given that the ESP32 can now publish to MQTT in real-time while connected to the car (as long as the car is within home Wi-Fi range)? Or do we keep the buffer for when the car drives away from the home Wi-Fi?
 
 ## Proposed Changes
 
-### Build Configuration
+### [SPEC.md]
 
-#### [MODIFY] [platformio.ini](file:///home/bert/projects/e-up!Proxy/platformio.ini)
-* Set `default_envs = esp32c6` (or `esp32c6-ota`).
-* Update `env:esp32c6` to include the OTA upload configuration:
-  * `upload_protocol = espota`
-  * `upload_port = 192.168.1.55` (default IP from local network)
-  * `upload_flags = --auth=eup-proxy-ota`
-* Configure `env:esp32c6-usb` (or rename `env:usb`) as the USB flashing fallback for the ESP32-C6 board:
-  * `board = esp32-c6-devkitc-1`
-  * `upload_protocol = esptool`
-  * `upload_port = /dev/ttyACM0`
-  * `upload_speed = 460800`
-* Remove or comment out the legacy ESP32-WROOM-32 environments (`env:esp32dev` and old `env:usb`) to prevent accidental compilation/flashing for the wrong target.
+We will rewrite sections of `SPEC.md` to reflect the new architecture.
 
-### Source Code
+#### [MODIFY] [SPEC.md](file:///home/bert/projects/e-up-Proxy_BLE/SPEC.md)
 
-#### [MODIFY] [main.cpp](file:///home/bert/projects/e-up!Proxy/src/main.cpp)
-* Remove the `#if defined(IS_ESP32_C6)` conditional check around the RF switch/ceramic antenna configuration in `setup()`, making the ESP32-C6 RF switch and ceramic antenna configuration unconditional.
-* Alternatively, ensure `IS_ESP32_C6=1` is always defined and clean up any legacy ESP32-WROOM specific conditional blocks if applicable.
+1. **Header & Architecture:** 
+   - Update hardware description to indicate BLE usage for the WiCAN Dongle.
+   - Increment Target Firmware Version to `3.0.0-BLE` (or similar).
 
----
+2. **[SPEC-01] System States & Wi-Fi Logic:**
+   - **Remove:** The "Dongle First exklusiv" Wi-Fi switching logic.
+   - **Add:** New concurrent state logic where the system connects to Home Wi-Fi and BLE concurrently.
+   - **New States:**
+     - `WIFI_CONNECTING` / `BLE_CONNECTING`
+     - `OPERATIONAL_BUFFERING` (Connected to BLE, disconnected from Wi-Fi - car is away from home)
+     - `OPERATIONAL_ONLINE` (Connected to both - real-time MQTT streaming)
+
+3. **[SPEC-02] Diagnostics & Logs:**
+   - **Update:** Remove `[SWITCH]` logs for Wi-Fi.
+   - **Add:** BLE connection/disconnection logs.
+
+4. **[SPEC-03] Data Buffering Contract:**
+   - Modify to state that buffering is only active when Home Wi-Fi is unreachable. When Home Wi-Fi is connected, payloads are published immediately without hitting LittleFS to save flash wear.
+
+5. **[SPEC-04] OBD2 Metrics:**
+   - **Update:** Replace TCP Socket (Port 35000) instructions with BLE ELM327 characteristic read/write instructions.
 
 ## Verification Plan
 
-### Automated Tests
-* Run compilation for the default env `esp32c6` to ensure it builds successfully:
-  ```bash
-  wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "pio run"
-  ```
-* Run compilation for the usb env `esp32c6-usb` to verify usb configuration:
-  ```bash
-  wsl -d Ubuntu-22.04 --cd /home/bert/projects/e-up!Proxy bash -l -c "pio run -e esp32c6-usb"
-  ```
-
 ### Manual Verification
-* Flash the built binary to the ESP32-C6 target via USB (`/dev/ttyACM0`) once confirmed by the user.
-* Confirm booting and serial output.
+- Review the updated `SPEC.md` for logical consistency and adherence to the new BLE approach.
+- Ensure the state machine logic correctly handles scenarios where the car drives out of Home Wi-Fi range while maintaining the BLE connection to the dongle.

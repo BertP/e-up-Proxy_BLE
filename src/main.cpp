@@ -34,8 +34,8 @@ void setup() {
 
 void loop() {
   Serial.println("Scanning for BLE devices...");
-  BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
-  Serial.printf("Scan done! Found %d devices.\n", foundDevices.getCount());
+  BLEScanResults* foundDevices = pBLEScan->start(scanTime, false);
+  Serial.printf("Scan done! Found %d devices.\n", foundDevices->getCount());
   pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
   delay(2000);
 }

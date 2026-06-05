@@ -115,6 +115,9 @@ bool connectOBD(BLEAdvertisedDevice* device) {
 
     logObdEvent("CONN", "BLE Connected. Finding Service...");
     
+    // Give the ESP32 standard BLE stack time to complete the background MTU handshake
+    delay(500);
+
     BLERemoteService* pRemoteService = pBleClient->getService(BLEUUID(WICAN_BLE_SERVICE_UUID));
     if (pRemoteService == nullptr) {
         logObdEvent("ERROR", "Failed to find FFF0 service.");

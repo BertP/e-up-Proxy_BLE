@@ -24,7 +24,7 @@ extern PubSubClient mqttClient;
 extern ProxyState currentState;
 extern const char* stateNames[];
 
-extern bool otaInProgress;
+extern bool isBufferLocked();
 extern bool webServerRunning;
 extern bool timeSyncDone;
 

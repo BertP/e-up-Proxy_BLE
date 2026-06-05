@@ -1,6 +1,5 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <BLEDevice.h>
@@ -16,11 +15,11 @@ PubSubClient mqttClient(wifiClient);
 ProxyState currentState = STATE_SCANNING;
 const char* stateNames[] = { "SCANNING", "OPERATIONAL_BUFFERING", "OPERATIONAL_ONLINE" };
 
-bool otaInProgress = false;
+
 bool webServerRunning = false;
 bool timeSyncDone = false;
 static bool isWebServerStarted = false;
-static bool otaInitialized = false;
+
 bool mqttFlushDone = false;
 extern bool obdActive;
 
@@ -125,17 +124,6 @@ static void checkWiFiConnect() {
             logEvent("WEBSERVER", "Debug server started at http://" + WiFi.localIP().toString() + "/debug");
         }
         
-        if (!otaInitialized) {
-            ArduinoOTA.setHostname("eup-proxy");
-            ArduinoOTA.setPassword(OTA_PASSWORD);
-            ArduinoOTA.onStart([]() { otaInProgress = true; Serial.println("[OTA] Update starting..."); });
-            ArduinoOTA.onEnd([]() { Serial.println("[OTA] Update complete. Rebooting..."); });
-            ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) { feedWDT(); });
-            ArduinoOTA.onError([](ota_error_t error) { otaInProgress = false; Serial.printf("[ERROR] OTA failed, error: %d\n", error); });
-            ArduinoOTA.begin();
-            otaInitialized = true;
-            logEvent("OTA", "OTA service initialized on port 3232.");
-        }
         evaluateOverallState();
         return;
     }
@@ -155,7 +143,7 @@ static void handleWiFiLogic() {
 
     if (WiFi.status() == WL_CONNECTED) {
         if (webServerRunning) server.handleClient();
-        if (otaInitialized) ArduinoOTA.handle();
+
 
         if (!timeSyncDone) {
             struct tm timeinfo;
@@ -179,7 +167,7 @@ static void handleWiFiLogic() {
             flushQueueToMQTT();
         }
 
-        if (!otaInProgress && (millis() - wifiOnlineStartTime > 600000)) { // 10 minutes timeout
+        if ((millis() - wifiOnlineStartTime > 600000)) { // 10 minutes timeout
             logEvent("SWITCH", "10-minute Home WiFi timeout reached. Disabling Wi-Fi to save power.");
             WiFi.disconnect(true);
             WiFi.mode(WIFI_OFF);
@@ -191,7 +179,7 @@ static void handleWiFiLogic() {
     }
 
     // WiFi is disconnected. Should we scan?
-    if (getQueueSize() > 0 && !isWifiScanning && wifiConnectPhase == WIFI_IDLE && !otaInProgress) {
+    if (getQueueSize() > 0 && !isWifiScanning && wifiConnectPhase == WIFI_IDLE) {
         WiFi.mode(WIFI_STA);
         logEvent("SCAN", "Buffered telemetry found. Scanning for Home WiFi...");
         WiFi.scanNetworks(true, false);
@@ -240,13 +228,14 @@ static void handleBLELogic() {
         return;
     }
 
-    if (!isBleScanning && !otaInProgress) {
-        // Only log sporadically to avoid spam
-        pBLEScan->start(BLE_SCAN_TIME_S, onBleScanComplete, false);
-        isBleScanning = true;
-    }
-
     if (foundWicanDevice != nullptr) {
+        // Safety: ensure scanner is fully stopped
+        pBLEScan->stop();
+        pBLEScan->clearResults();
+        isBleScanning = false;
+
+        delay(100); // Give the RF hardware a moment
+
         obdActive = connectOBD(foundWicanDevice);
         if (obdActive) {
             obdSessionStartTime = millis();
@@ -259,6 +248,10 @@ static void handleBLELogic() {
         }
         delete foundWicanDevice;
         foundWicanDevice = nullptr;
+    } else if (!isBleScanning) {
+        // Only log sporadically to avoid spam
+        pBLEScan->start(BLE_SCAN_TIME_S, onBleScanComplete, false);
+        isBleScanning = true;
     }
 }
 

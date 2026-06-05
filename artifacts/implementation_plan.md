@@ -1,57 +1,70 @@
-# [Goal Description]
+# Implementation Plan: BLE Architecture Migration (3.0.0-BLE)
 
-The user has reconfigured the WiCAN OBD2 dongle to `BLE+Station` mode. This enables a major architectural shift for the `e-up!Proxy`: Instead of the ESP32 dynamically switching its Wi-Fi connection between the car's dongle and the home network, it can now connect to the Home Wi-Fi and the WiCAN dongle via **BLE (Bluetooth Low Energy)** simultaneously.
+## Goal Description
+The project specification (`SPEC.md`) was recently updated to version 3.0.0-BLE, dictating a major architecture shift: the proxy must now communicate with the WiCAN OBD2 dongle via Bluetooth Low Energy (BLE GATT) instead of the previous TCP/WiFi socket. 
 
-This plan outlines the required updates to `SPEC.md` before any code changes are made.
-
-> [!IMPORTANT]
-> **Major Architectural Change:** Moving to BLE means we can eliminate the complex Wi-Fi state switching. The proxy can maintain a persistent MQTT connection while polling OBD data over BLE.
+Currently, the codebase (`OBDManager.cpp` and `NetworkManager.cpp`) still relies on `WiFiClient` and port 35000. This plan outlines the necessary refactoring to align the codebase with `SPEC-01` and `SPEC-04`.
 
 ## User Review Required
-
-Please review the proposed architectural changes to the state machine and communication protocols. 
-
-> [!WARNING]
-> BLE communication on the ESP32 can be memory-intensive. We need to ensure that running both the BLE stack and the Wi-Fi/WebServer/MQTT stack concurrently does not exceed the available heap memory.
+> [!IMPORTANT]
+> This is a major rewrite of the core connectivity and OBD managers. Please confirm if we should proceed with this migration now.
 
 ## Open Questions
-
-> [!IMPORTANT]
-> 1. **BLE Protocol Details:** Does the WiCAN dongle emulate a standard serial port over BLE (e.g., using the Nordic UART Service - NUS) or does it have a custom GATT service/characteristic for sending and receiving ELM327 commands?
-> 2. **State Machine:** Do we completely remove the local LittleFS data buffering queue, given that the ESP32 can now publish to MQTT in real-time while connected to the car (as long as the car is within home Wi-Fi range)? Or do we keep the buffer for when the car drives away from the home Wi-Fi?
+> [!WARNING]
+> 1. In `SPEC-01`, it says the BLE device name prefix is `WiC_`. Should we dynamically discover the rest of the MAC/Name or just connect to the first device matching this prefix?
+> 2. Do we have the precise UUIDs for the RX and TX characteristics of the `FFF0` service? (Usually `FFF1` and `FFF2`, but we need to be sure).
 
 ## Proposed Changes
 
-### [SPEC.md]
+### `include/config.h`
+- Add BLE configuration constants (Service UUID `FFF0`, device name prefix `WiC_`).
+- Adjust state machine state definitions if necessary to reflect `OPERATIONAL_BUFFERING` (BLE only) and `OPERATIONAL_ONLINE` (Wi-Fi + BLE).
 
-We will rewrite sections of `SPEC.md` to reflect the new architecture.
+---
 
-#### [MODIFY] [SPEC.md](file:///home/bert/projects/e-up-Proxy_BLE/SPEC.md)
+### `src/NetworkManager.cpp` & `include/NetworkManager.h`
+- Modify the state machine to support concurrent BLE and Wi-Fi connections as per `SPEC-01`.
+- Implement non-blocking BLE scanning alongside Wi-Fi connecting.
+- Manage the 10-minute Wi-Fi shutdown timer and trigger Wi-Fi wakeups when LittleFS buffer has data.
 
-1. **Header & Architecture:** 
-   - Update hardware description to indicate BLE usage for the WiCAN Dongle.
-   - Increment Target Firmware Version to `3.0.0-BLE` (or similar).
+#### [MODIFY] NetworkManager.cpp
+#### [MODIFY] NetworkManager.h
 
-2. **[SPEC-01] System States & Wi-Fi Logic:**
-   - **Remove:** The "Dongle First exklusiv" Wi-Fi switching logic.
-   - **Add:** New concurrent state logic where the system connects to Home Wi-Fi and BLE concurrently.
-   - **New States:**
-     - `WIFI_CONNECTING` / `BLE_CONNECTING`
-     - `OPERATIONAL_BUFFERING` (Connected to BLE, disconnected from Wi-Fi - car is away from home)
-     - `OPERATIONAL_ONLINE` (Connected to both - real-time MQTT streaming)
+---
 
-3. **[SPEC-02] Diagnostics & Logs:**
-   - **Update:** Remove `[SWITCH]` logs for Wi-Fi.
-   - **Add:** BLE connection/disconnection logs.
+### `src/OBDManager.cpp` & `include/OBDManager.h`
+- Remove `WiFiClient obdClient`.
+- Implement `BLEClient` and connect to the `FFF0` service.
+- Subscribe to the TX characteristic for notifications.
+- Replace the blocking `sendCommand` TCP read loop with an asynchronous/notification-based BLE read mechanism.
+- Ensure the ELM327 initialization and UDS Session Keep-Alive (`3E 80`) are correctly routed over BLE.
 
-4. **[SPEC-03] Data Buffering Contract:**
-   - Modify to state that buffering is only active when Home Wi-Fi is unreachable. When Home Wi-Fi is connected, payloads are published immediately without hitting LittleFS to save flash wear.
+#### [MODIFY] OBDManager.cpp
+#### [MODIFY] OBDManager.h
 
-5. **[SPEC-04] OBD2 Metrics:**
-   - **Update:** Replace TCP Socket (Port 35000) instructions with BLE ELM327 characteristic read/write instructions.
+---
+
+### `src/main.cpp`
+- Remove the temporary BLE scanner testing code.
+- Ensure `BLEDevice::init()` is called appropriately before NetworkManager starts.
+
+#### [MODIFY] main.cpp
+
+---
+
+### Documentation
+- Update `README.md` to reflect the new BLE architecture, removing mentions of TCP Port 35000.
+- Update `CHANGELOG.md` with the new version.
+
+#### [MODIFY] README.md
+#### [MODIFY] CHANGELOG.md
 
 ## Verification Plan
 
+### Automated Tests
+- Run `bash -l -c "pio run"` to ensure the project compiles cleanly after substituting TCP for BLE.
+- Update native mocks (`pio test -e native`) if they depend on `WiFiClient`.
+
 ### Manual Verification
-- Review the updated `SPEC.md` for logical consistency and adherence to the new BLE approach.
-- Ensure the state machine logic correctly handles scenarios where the car drives out of Home Wi-Fi range while maintaining the BLE connection to the dongle.
+- Ask the user to compile and flash via USB or OTA.
+- Verify through serial monitor that BLE device is found and connected.

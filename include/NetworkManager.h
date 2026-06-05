@@ -8,8 +8,8 @@
 
 enum ProxyState {
     STATE_SCANNING,
-    STATE_CONNECTED_TO_WICAN,
-    STATE_CONNECTED_TO_HOME
+    STATE_OPERATIONAL_BUFFERING,
+    STATE_OPERATIONAL_ONLINE
 };
 
 enum WiFiConnectPhase {
@@ -29,10 +29,8 @@ extern bool webServerRunning;
 extern bool timeSyncDone;
 
 void initNetwork();
-void runWiFiStateMachine();
+void runNetworkStateMachine();
 void transitionTo(ProxyState newState, const String& reason = "");
-void handleScanning();
-void handleHome();
 void flushQueueToMQTT();
 void publishHAAutoDiscovery();
 void fetchOBDMetrics(bool forceSlow = false);

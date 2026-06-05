@@ -1,17 +1,42 @@
 #include "OBDManager.h"
 #include "config.h"
 #include "logger.h"
-#include <WiFi.h>
-#include <WiFiClient.h>
 
-static WiFiClient obdClient;
+static BLEClient* pBleClient = nullptr;
+static BLERemoteCharacteristic* pWriteChar = nullptr;
+static BLERemoteCharacteristic* pNotifyChar = nullptr;
+
 static String currentHeader = "";
 static unsigned long lastTesterPresent = 0;
 static float lastRealVoltage = 12.0f;
+extern void feedWDT(); // Keep watchdog alive
+
+static volatile bool responseReady = false;
+static String bleResponse = "";
+
+class MyClientCallback : public BLEClientCallbacks {
+    void onConnect(BLEClient* pclient) {
+    }
+
+    void onDisconnect(BLEClient* pclient) {
+        logObdEvent("DISCONN", "BLE Client Disconnected");
+    }
+};
+
+static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+    for (size_t i = 0; i < length; i++) {
+        char c = (char)pData[i];
+        if (c == '>') {
+            responseReady = true;
+        } else {
+            bleResponse += c;
+        }
+    }
+}
 
 static String stripWhitespace(const String& str) {
     String clean;
-    clean.reserve(str.length()); // Pre-allocate to avoid O(n^2) reallocation
+    clean.reserve(str.length());
     for (unsigned int i = 0; i < str.length(); i++) {
         char c = str[i];
         if (c != ' ' && c != '\r' && c != '\n') {
@@ -22,33 +47,28 @@ static String stripWhitespace(const String& str) {
 }
 
 static String sendCommand(const String& cmd, unsigned int timeout = OBD_CMD_TIMEOUT_MS) {
-    if (!obdClient.connected()) {
+    if (!pBleClient || !pBleClient->isConnected() || !pWriteChar) {
         return "";
     }
 
-    // Clear read buffer
-    while (obdClient.available()) {
-        obdClient.read();
-    }
+    responseReady = false;
+    bleResponse = "";
 
-    // Send command with carriage return
-    obdClient.print(cmd + "\r");
+    String fullCmd = cmd + "\r";
+    pWriteChar->writeValue(fullCmd.c_str(), fullCmd.length());
 
-    // Read response until '>' prompt or timeout
-    String response = "";
     unsigned long start = millis();
     bool timedOut = true;
     while (millis() - start < timeout) {
-        if (obdClient.available()) {
-            char c = obdClient.read();
-            if (c == '>') {
-                timedOut = false;
-                break;
-            }
-            response += c;
+        if (responseReady) {
+            timedOut = false;
+            break;
         }
-        yield();
+        delay(10);
+        feedWDT();
     }
+    
+    String response = bleResponse;
     response.trim();
 
     if (timedOut && response.length() == 0) {
@@ -59,7 +79,6 @@ static String sendCommand(const String& cmd, unsigned int timeout = OBD_CMD_TIME
 
     return response;
 }
-
 
 static bool setHeader(const String& header) {
     if (currentHeader == header) {
@@ -79,17 +98,49 @@ static bool setHeader(const String& header) {
     return false;
 }
 
-bool connectOBD() {
-    IPAddress gateway = WiFi.gatewayIP();
-    logObdEvent("CONN", "Connecting to OBD TCP Gateway " + gateway.toString() + ":" + String(WICAN_PORT) + "...");
-    obdClient.setTimeout(3); // 3 seconds timeout
+bool connectOBD(BLEAdvertisedDevice* device) {
+    if (!device) return false;
 
-    if (!obdClient.connect(gateway, WICAN_PORT)) {
-        logObdEvent("ERROR", "OBD TCP connection failed!");
+    logObdEvent("CONN", "Connecting to OBD BLE Gateway: " + String(device->getName().c_str()));
+    
+    if (pBleClient == nullptr) {
+        pBleClient = BLEDevice::createClient();
+        pBleClient->setClientCallbacks(new MyClientCallback());
+    }
+
+    if (!pBleClient->connect(device)) {
+        logObdEvent("ERROR", "OBD BLE connection failed!");
         return false;
     }
 
-    logObdEvent("CONN", "OBD TCP connected. Running ELM327 init sequence...");
+    logObdEvent("CONN", "BLE Connected. Finding Service...");
+    
+    BLERemoteService* pRemoteService = pBleClient->getService(BLEUUID(WICAN_BLE_SERVICE_UUID));
+    if (pRemoteService == nullptr) {
+        logObdEvent("ERROR", "Failed to find FFF0 service.");
+        pBleClient->disconnect();
+        return false;
+    }
+
+    // Dynamically find TX/RX characteristics
+    pWriteChar = nullptr;
+    pNotifyChar = nullptr;
+    std::map<uint16_t, BLERemoteCharacteristic*>* pCharacteristics = pRemoteService->getCharacteristicsByHandle();
+    for (auto& elem : *pCharacteristics) {
+        BLERemoteCharacteristic* pChar = elem.second;
+        if (pChar->canWrite() || pChar->canWriteNoResponse()) pWriteChar = pChar;
+        if (pChar->canNotify()) pNotifyChar = pChar;
+    }
+
+    if (!pWriteChar || !pNotifyChar) {
+        logObdEvent("ERROR", "Failed to find necessary characteristics.");
+        pBleClient->disconnect();
+        return false;
+    }
+
+    pNotifyChar->registerForNotify(notifyCallback);
+    logObdEvent("CONN", "Characteristics found and notifications registered. Running ELM327 init...");
+
     currentHeader = ""; // Reset cached header
 
     // ELM327 Init Sequence
@@ -129,26 +180,23 @@ bool connectOBD() {
 }
 
 void disconnectOBD() {
-    if (obdClient.connected()) {
-        IPAddress gateway = WiFi.gatewayIP();
-        logObdEvent("CONN", "OBD session closed. TCP disconnected from " + gateway.toString() + ":" + String(WICAN_PORT) + ".");
-        obdClient.stop();
+    if (pBleClient && pBleClient->isConnected()) {
+        logObdEvent("CONN", "OBD session closed. BLE disconnected.");
+        pBleClient->disconnect();
     }
 }
 
 void runOBDKeepAlive() {
-    if (!obdClient.connected()) {
+    if (!pBleClient || !pBleClient->isConnected()) {
         return;
     }
 
     unsigned long now = millis();
-    // Keep active with 3E 80 (Tester Present, suppress response)
     if (now - lastTesterPresent >= TESTER_PRESENT_INTERVAL_MS) {
         lastTesterPresent = now;
-        // Temporarily ensure 7E5 header is selected for session keep-alive
         String savedHeader = currentHeader;
         if (setHeader("7E5")) {
-            sendCommand("3E 80", 500); // 500ms short timeout
+            sendCommand("3E 80", 500);
         }
         if (savedHeader.length() > 0 && savedHeader != "7E5") {
             setHeader(savedHeader);
@@ -163,7 +211,6 @@ static bool queryUDS1Byte(const String& header, const String& did, float& outVal
     String resp = sendCommand(cmd);
     String clean = stripWhitespace(resp);
 
-    // Expected positive response format starts with UDS response code 62 + DID
     String expectedPrefix = "62" + stripWhitespace(did);
     int prefixIndex = clean.indexOf(expectedPrefix);
 
@@ -174,7 +221,6 @@ static bool queryUDS1Byte(const String& header, const String& did, float& outVal
         return true;
     }
 
-    // Distinguish between NRC and empty response
     if (clean.length() == 0) {
         logObdEvent("ERROR", "OBD query failed: DID " + did + " — no response (timeout)");
     } else if (clean.indexOf("7F") >= 0) {
@@ -256,15 +302,11 @@ static void deriveRange(TelemetryData& data) {
     data.range = data.bat_cap * (data.soc / 100.0f) * range_coefficient;
 }
 
-
 bool queryGroupA(TelemetryData& data) {
-    if (!obdClient.connected()) {
-        return false;
-    }
+    if (!pBleClient || !pBleClient->isConnected()) return false;
 
     bool hasSomeData = false;
 
-    // 1. SoC (7E5, DID 02 8C, raw / 2.5 -> raw * 0.4)
     float socVal = 0.0f;
     if (queryUDS1Byte("7E5", "02 8C", socVal, 0.4f, 0.0f)) {
         data.soc = socVal;
@@ -273,7 +315,6 @@ bool queryGroupA(TelemetryData& data) {
         data.soc = NAN;
     }
 
-    // 2. Temp (7E5, DID 2A 0B, raw / 64 -> raw * 0.015625)
     float tempVal = 0.0f;
     if (queryUDS2Bytes("7E5", "2A 0B", tempVal, 0.015625f, 0.0f)) {
         data.temp = tempVal;
@@ -282,7 +323,6 @@ bool queryGroupA(TelemetryData& data) {
         data.temp = NAN;
     }
 
-    // 3. Battery Capacity (7E5, DID 22 E1, raw * 0.1)
     float capVal = 0.0f;
     if (queryUDS2Bytes("7E5", "22 E1", capVal, 0.1f, 0.0f)) {
         data.bat_cap = capVal;
@@ -291,7 +331,6 @@ bool queryGroupA(TelemetryData& data) {
         data.bat_cap = NAN;
     }
 
-    // 4. 12V Voltage (AT RV)
     String rvResp = sendCommand("AT RV");
     String cleanRv = stripWhitespace(rvResp);
     float voltVal = 0.0f;
@@ -299,7 +338,7 @@ bool queryGroupA(TelemetryData& data) {
         voltVal = cleanRv.toFloat();
         if (voltVal > 0.0f) {
             data.volt = voltVal;
-            lastRealVoltage = voltVal; // Update global cache
+            lastRealVoltage = voltVal; 
             hasSomeData = true;
         } else {
             data.volt = NAN;
@@ -309,7 +348,6 @@ bool queryGroupA(TelemetryData& data) {
         data.volt = NAN;
     }
 
-    // 5. Tire Pressure Alarm (7E0, DID 02 1A, raw)
     float tpVal = 0.0f;
     if (queryUDS1Byte("7E0", "02 1A", tpVal, 1.0f, 0.0f)) {
         data.tp_alarm = tpVal;
@@ -318,22 +356,17 @@ bool queryGroupA(TelemetryData& data) {
         data.tp_alarm = NAN;
     }
 
-    // Derive Range
     deriveRange(data);
-    data.power = NAN; // Power derivation placeholder
+    data.power = NAN; 
 
     return hasSomeData;
 }
 
-
 bool queryGroupB(TelemetryData& data) {
-    if (!obdClient.connected()) {
-        return false;
-    }
+    if (!pBleClient || !pBleClient->isConnected()) return false;
 
     bool hasSomeData = false;
 
-    // 1. Odometer (7E0, DID 22 03, raw 3 bytes)
     float odoVal = 0.0f;
     if (queryUDS3Bytes("7E0", "22 03", odoVal, 1.0f, 0.0f)) {
         data.odo = odoVal;
@@ -342,7 +375,6 @@ bool queryGroupB(TelemetryData& data) {
         data.odo = NAN;
     }
 
-    // 2. Days to Service (7E0, DID 02 48, raw 2 bytes)
     float daysVal = 0.0f;
     if (queryUDS2Bytes("7E0", "02 48", daysVal, 1.0f, 0.0f)) {
         data.service_days = daysVal;
@@ -351,7 +383,6 @@ bool queryGroupB(TelemetryData& data) {
         data.service_days = NAN;
     }
 
-    // 3. Km to Service (7E0, DID 02 47, raw 2 bytes)
     float kmVal = 0.0f;
     if (queryUDS2Bytes("7E0", "02 47", kmVal, 1.0f, 0.0f)) {
         data.service_km = kmVal;
@@ -362,7 +393,6 @@ bool queryGroupB(TelemetryData& data) {
 
     return hasSomeData;
 }
-
 
 void generateSimulatedTelemetry(TelemetryData& data, bool slowGroup) {
     if (!slowGroup) {

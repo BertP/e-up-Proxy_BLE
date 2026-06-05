@@ -4,10 +4,12 @@
 #include <Arduino.h>
 #include "buffer.h"
 
-// Initialize the OBD2 TCP client connection
-bool connectOBD();
+#include <BLEDevice.h>
 
-// Disconnect from Wican OBD TCP server
+// Initialize the OBD2 BLE client connection
+bool connectOBD(BLEAdvertisedDevice* device);
+
+// Disconnect from Wican OBD BLE server
 void disconnectOBD();
 
 // Periodic keep-alive task (Tester Present)

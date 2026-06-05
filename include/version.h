@@ -3,6 +3,6 @@
 
 // Single source of truth for firmware version.
 // This file is NOT gitignored - version is always tracked.
-#define FW_VERSION "2.4.3"
+#define FW_VERSION "3.0.0-BLE"
 
 #endif // VERSION_H

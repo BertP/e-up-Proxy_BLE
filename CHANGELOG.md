@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.0-BLE (2026-06-05)
+- Fully migrated from TCP/IP OBD communication to BLE GATT.
+- Refactored NetworkManager to support simultaneous BLE scanning and Wi-Fi operation.
+- Eliminated blocking OBD routines in favor of asynchronous BLE notifications.
+- Re-configured partition table for 8MB Flash to accommodate ESP32 BLE stack.
+
 ## 2.3-logging-opt (2026-05-29)
 - Removed redundant high-frequency telemetry logging from LittleFS to prevent log spam and flash wear
 - Added dedicated MQTT logging file `/mqtt.log` and registered `/mqtt` web endpoint to monitor broker activities

@@ -1,0 +1,85 @@
+=========================================
+SYSTEM STATUS (GET /status)
+=========================================
+Uptime: 21s
+State: CONNECTED_TO_HOME
+Free Heap: 212,064 bytes
+Wi-Fi SSID: "partlyfoggy"
+Wi-Fi RSSI: -51 dBm
+MQTT Connected: Yes
+MQTT State: 0 (OK)
+OBD Active: No
+Queue Size: 0
+Firmware Version: 2.4.2-dongle-first
+Latest OBD Values:
+  - SoC: 0
+  - Board Voltage: 0V
+  - Temp: 0
+  - Battery Capacity: 0
+  - Odometer: 0
+
+=========================================
+DEBUG LOGS (GET /debug)
+=========================================
+[Up 00:00:27] [BUFFER] [NO-NTP] Successfully removed /queue/7_7109.json
+[Up 00:00:27] [BUFFER] [NO-NTP] Successfully removed /queue/7_7584.json
+[Up 00:00:28] [BUFFER] [NO-NTP] Successfully removed /queue/8_8270.json
+...
+[Up 00:00:42] [BOOT] [NO-NTP] State machine initialised. Entering SCANNING.
+[Up 00:00:42] [BOOT] NTP synchronised. Local time: 13:42:44 (Europe/Berlin, CEST +02:00)
+[Up 00:00:00] [BOOT] e-up!Proxy starting. Firmware: 2.4.2-dongle-first
+[Up 00:00:00] [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: D4:E9:F4:B4:4B:E0
+[Up 00:00:00] [BOOT] [NO-NTP] LittleFS mounted. Free: 50 KB / 50 KB cap
+[Up 00:00:00] [BOOT] [NO-NTP] Buffered payloads in queue: 0
+[Up 00:00:00] [BOOT] [NO-NTP] Boot counter: 1/5
+[Up 00:00:00] [BOOT] [NO-NTP] Initializing hardware Watchdog (30s)...
+[Up 00:00:01] [SCAN] [NO-NTP] Starting non-blocking WiFi scan...
+[Up 00:00:04] [SCAN] [NO-NTP] Found 3 known networks:
+[Up 00:00:04] [SCAN] [NO-NTP]   "partlyfoggy"  RSSI: -54 dBm  CH: 3  [KNOWN]
+[Up 00:00:04] [SCAN] [NO-NTP]   "partlycloudy"  RSSI: -79 dBm  CH: 6  [KNOWN]
+[Up 00:00:04] [SCAN] [NO-NTP]   "partlycloudy"  RSSI: -85 dBm  CH: 1  [KNOWN]
+[Up 00:00:04] [SCAN] [NO-NTP] Priority target selected: "partlyfoggy"
+[Up 00:00:04] [SWITCH] [NO-NTP] Connecting to: "partlyfoggy" (non-blocking, timeout: 15s)
+[Up 00:00:04] [SWITCH] [NO-NTP] Connected. Duration: 290 ms. IP: 192.168.1.55
+[Up 00:00:05] [WEBSERVER] [NO-NTP] Debug server started at http://192.168.1.55/debug
+[Up 00:00:05] [OTA] [NO-NTP] OTA service initialized on port 3232.
+[Up 00:00:06] [BOOT] NTP synchronised. Local time: 13:43:02 (Europe/Berlin, CEST +02:00)
+[13:43:06] [BOOT] State machine initialised. Entering SCANNING.
+
+=========================================
+OBD DIAGNOSTICS LOGS (GET /obd)
+=========================================
+[Up 00:00:24] [CONN] [NO-NTP] ELM327 Init: AT SP 6 -> OK
+[Up 00:00:24] [CONN] [NO-NTP] ELM327 Init: AT AT 1 -> OK
+[Up 00:00:25] [CONN] [NO-NTP] ELM327 Init: AT ST FF -> OK
+[Up 00:00:25] [CONN] [NO-NTP] Real OBD board voltage read: 12.70V
+[Up 00:00:25] [CONN] [NO-NTP] Switching CAN Header to 7E5
+[Up 00:00:25] [CONN] [NO-NTP] Opening UDS extended diagnostic session (10 03) on 7E5...
+[Up 00:00:25] [ERROR] [NO-NTP] Failed to open UDS extended session! Response: CAN ERROR
+[Up 00:00:25] [CONN] [NO-NTP] OBD session closed. TCP disconnected from 192.168.0.10:35000.
+[Up 00:00:39] [CONN] [NO-NTP] Connecting to OBD TCP Gateway 192.168.0.10:35000...
+...
+[Up 00:01:09] [CONN] [NO-NTP] OBD TCP connected. Running ELM327 init sequence...
+[Up 00:01:09] [CONN] [NO-NTP] ELM327 Init: AT E0 -> OK
+[Up 00:01:09] [CONN] [NO-NTP] ELM327 Init: AT L0 -> OK
+[Up 00:01:10] [CONN] [NO-NTP] ELM327 Init: AT H0 -> OK
+[Up 00:01:10] [CONN] [NO-NTP] ELM327 Init: AT SP 6 -> OK
+[Up 00:01:10] [CONN] [NO-NTP] ELM327 Init: AT AT 1 -> OK
+[Up 00:01:10] [CONN] [NO-NTP] ELM327 Init: AT ST FF -> OK
+[Up 00:01:10] [CONN] [NO-NTP] Real OBD board voltage read: 12.70V
+[Up 00:01:10] [CONN] [NO-NTP] Switching CAN Header to 7E5
+[Up 00:01:10] [CONN] [NO-NTP] Opening UDS extended diagnostic session (10 03) on 7E5...
+[Up 00:01:10] [ERROR] [NO-NTP] Failed to open UDS extended session! Response: CAN ERROR
+
+=========================================
+MQTT LOGS (GET /mqtt)
+=========================================
+[Up 00:00:33] [MQTT] [NO-NTP] Publishing to topic eup/data: {"soc":0,"volt":14.7,"temp":0,"range":0,"power":0,"odo":0,"service_days":0,"service_km":0,"bat_cap":0,"tp_alarm":0,"ts":8,"src":"CAR_BUFFERED"}
+...
+[Up 00:00:42] [MQTT] [NO-NTP] Flush finished. Dispatched 100 messages.
+[Up 00:00:42] [MQTT] [NO-NTP] Updating eup/lastSync: 2026-06-01T13:42:44+02:00
+[Up 00:00:05] [MQTT] [NO-NTP] Connecting to Broker 192.168.1.251...
+[Up 00:00:05] [MQTT] [NO-NTP] Successfully connected to Broker.
+[Up 00:00:05] [CONN] [NO-NTP] Publishing Home Assistant Auto-Discovery sensors...
+[Up 00:00:05] [CONN] [NO-NTP] Home Assistant Auto-Discovery published.
+[Up 00:00:05] [MQTT] [NO-NTP] No buffered data to flush.

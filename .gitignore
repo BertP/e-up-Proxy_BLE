@@ -1,0 +1,21 @@
+# Build artifacts
+.pio/
+
+# Credentials — use config.example.h as template
+include/config.h
+
+# Firmware binaries (built locally, not tracked)
+artifacts/firmware.bin
+artifacts/firmware_*.bin
+
+# IDE
+.vscode/
+.idea/
+
+# Local logs
+log.log
+*.log
+
+# Native test directories
+test_queue/
+test_fs/

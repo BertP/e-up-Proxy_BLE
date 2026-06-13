@@ -34,5 +34,6 @@ void transitionTo(ProxyState newState, const String& reason = "");
 void flushQueueToMQTT();
 void publishHAAutoDiscovery();
 void fetchOBDMetrics(bool forceSlow = false);
+void initiateShutdownSequence();
 
 #endif // NETWORK_MANAGER_H

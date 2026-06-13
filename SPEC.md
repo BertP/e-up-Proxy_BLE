@@ -22,7 +22,7 @@ The proxy, which is permanently installed in the vehicle, must implement a State
 
 | Role | Count | Details |
 |---|---|---|
-| Home Wi-Fi | 2 | Configured SSIDs / Passwords (e.g., `partlycloudy`) |
+| Home Wi-Fi | 2 | Configured SSIDs / Passwords (e.g., `partlycloudy-iot`) |
 | Dongle BLE | 1 | BLE Device Name Prefix `WiC_` (e.g., `WiC_fc012cdbd501`), Service UUID `FFF0` |
 
 ### Connection States & LED Blink Codes
@@ -63,7 +63,7 @@ To conserve energy in the vehicle, the Home Wi-Fi radio is strictly managed:
 ### Log Storage
 
 - **Mechanism:** LittleFS, dedicated file `debug.log`.
-- **Size cap:** 50 KB maximum. When the limit is reached, oldest entries are purged automatically (circular/ring buffer behaviour).
+- **Size cap:** 25 KB maximum per file. A 2-file rotation strategy is used (`debug.log` and `debug.bak.log`), making the total log storage cap 50 KB. When the limit is reached, the older backup is purged automatically.
 
 ### Log Entry Format
 
@@ -97,15 +97,7 @@ Logged when the proxy connects or disconnects from networks:
   - `GET /files` — Returns a JSON array listing all currently buffered telemetry payload files in LittleFS.
   - `POST /clear` — Manually clears/wipes the persistent LittleFS telemetry queue directory.
 
-### Over-the-Air (OTA) Updates
-- Active **only** when connected to Home Wi-Fi.
-- **Protocol:** ArduinoOTA on standard port `3232`.
-- **Hostname:** `eup-proxy`
-- **Security:** Access is protected by the upload password `eup-proxy-ota`.
-- **OTA Lock Prevention Specifications:**
-  1. **Zero Filesystem Activity during OTA:** No LittleFS file operations are permitted inside any `ArduinoOTA` callbacks.
-  2. **Watchdog Keeping (WDT Feed):** Must feed WDT via `ArduinoOTA.onProgress`.
-  3. **Network Scan Lock:** The proxy must block all periodic network scanning and BLE operations while an active OTA update is in progress.
+
 
 ---
 
@@ -149,7 +141,7 @@ The buffered payload mirrors the `eup/data` MQTT schema:
 
 Source: `OBDManager.h`. The WiCAN Dongle is accessed via **Bluetooth Low Energy (BLE)** using the custom Serial Service UUID `0000FFF0-0000-1000-8000-00805F9B34FB`. ELM327 AT commands and UDS requests are written to the RX characteristic, and responses are read from the TX characteristic via notifications.
 
-A UDS Extended Diagnostic Session (`10 03`) is opened once per connection on ECU `7E5` and kept alive with `3E 80` (Tester Present, suppress response).
+A UDS Extended Diagnostic Session (`10 03`) is opened once per connection on ECU `7E5` and kept alive with `3E` (Tester Present, positive response). Omitting the `80` avoids an ELM327 timeout block.
 
 ### ECU Overview
 
@@ -184,7 +176,7 @@ Group B is also read **once immediately** after WiCAN BLE connection is establis
 - CAN protocol: 11-bit, 500 kbps (`AT SP 6`)
 - Header switching: `AT SH 7E5` / `AT SH 7E0`
 - **Command Timeout:** 2.0 seconds (`OBD_CMD_TIMEOUT_MS`).
-- **Tester Present Keep-Alive:** `3E 80` sent every 2.5 seconds (`TESTER_PRESENT_INTERVAL_MS`).
+- **Tester Present Keep-Alive:** `3E` sent every 2.5 seconds (`TESTER_PRESENT_INTERVAL_MS`).
 
 ---
 
@@ -210,3 +202,4 @@ Group B is also read **once immediately** after WiCAN BLE connection is establis
 |---|---|---|
 | 2026-05-31 | SPEC-01, SPEC-02, SPEC-04 | Dynamic Gateway IP resolution, Uptime-Timestamp prefix, and board voltage (AT RV) fallback |
 | 2026-06-05 | All | **Major Architecture Shift:** Transitioned from TCP/Wi-Fi to BLE GATT for OBD dongle communication. Updated state machine to handle concurrent BLE and Home Wi-Fi connections, reflecting in-car proxy operation. Target version `3.0.0-BLE`. |
+| 2026-06-13 | SPEC-01, SPEC-02, SPEC-04 | Updated SSIDs to `partlycloudy-iot`, documented 2-file log rotation (25KB each), removed OTA references, and changed Keep-Alive to `3E` to fix ELM327 blocking bug. |

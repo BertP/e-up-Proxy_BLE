@@ -94,14 +94,14 @@ void logBootSequence(const String& mac, size_t freeKB, size_t queueSize) {
 
     if (f) {
         f.printf("%s [BOOT] e-up!Proxy starting. Firmware: %s\n", upBuf, FW_VERSION);
-        f.printf("%s [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", upBuf, mac.c_str());
+        f.printf("%s [BOOT] [NO-NTP] Chip: %s, MAC: %s\n", upBuf, HARDWARE_PLATFORM, mac.c_str());
         f.printf("%s [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", upBuf, (unsigned int)freeKB);
         f.printf("%s [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", upBuf, (unsigned int)queueSize);
         f.close();
         
         // Also print to Serial
         Serial.printf("%s [BOOT] e-up!Proxy starting. Firmware: %s\n", upBuf, FW_VERSION);
-        Serial.printf("%s [BOOT] [NO-NTP] Chip: ESP32-WROOM-32, MAC: %s\n", upBuf, mac.c_str());
+        Serial.printf("%s [BOOT] [NO-NTP] Chip: %s, MAC: %s\n", upBuf, HARDWARE_PLATFORM, mac.c_str());
         Serial.printf("%s [BOOT] [NO-NTP] LittleFS mounted. Free: %u KB / 50 KB cap\n", upBuf, (unsigned int)freeKB);
         Serial.printf("%s [BOOT] [NO-NTP] Buffered payloads in queue: %u\n", upBuf, (unsigned int)queueSize);
     }

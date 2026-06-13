@@ -1,10 +1,12 @@
 #include "OBDManager.h"
 #include "config.h"
 #include "logger.h"
+#include <vector>
+#include <esp_task_wdt.h>
 
-static BLEClient* pBleClient = nullptr;
-static BLERemoteCharacteristic* pWriteChar = nullptr;
-static BLERemoteCharacteristic* pNotifyChar = nullptr;
+static NimBLEClient* pBleClient = nullptr;
+static NimBLERemoteCharacteristic* pWriteChar = nullptr;
+static NimBLERemoteCharacteristic* pNotifyChar = nullptr;
 
 static String currentHeader = "";
 static unsigned long lastTesterPresent = 0;
@@ -14,16 +16,46 @@ extern void feedWDT(); // Keep watchdog alive
 static volatile bool responseReady = false;
 static String bleResponse = "";
 
-class MyClientCallback : public BLEClientCallbacks {
-    void onConnect(BLEClient* pclient) {
+volatile bool isAuthenticationComplete = false;
+volatile bool isAuthenticationFailed = false;
+
+extern bool obdActive;
+
+class MyClientCallback : public NimBLEClientCallbacks {
+    void onConnect(NimBLEClient* pClient) override {
+        logEvent("CONN", "NimBLEClientCallbacks: Connected");
     }
 
-    void onDisconnect(BLEClient* pclient) {
-        logObdEvent("DISCONN", "BLE Client Disconnected");
+    void onDisconnect(NimBLEClient* pClient, int reason) override {
+        logEvent("DISCONN", "NimBLE Client Disconnected. Reason: " + String(reason));
+        obdActive = false;
+    }
+    
+    void onPassKeyEntry(NimBLEConnInfo& connInfo) override {
+        logEvent("SEC", "Passkey requested, injecting 654321");
+        NimBLEDevice::injectPassKey(connInfo, 654321);
+    }
+    
+    void onConfirmPasskey(NimBLEConnInfo& connInfo, uint32_t pass_key) override {
+        logEvent("SEC", "Confirming Passkey: " + String(pass_key));
+        NimBLEDevice::injectConfirmPasskey(connInfo, true);
+    }
+    
+    void onAuthenticationComplete(NimBLEConnInfo& connInfo) override {
+        if (!connInfo.isEncrypted()) {
+            logEvent("ERROR", "Encrypt connection failed - disconnecting");
+            isAuthenticationFailed = true;
+            NimBLEDevice::getClientByHandle(connInfo.getConnHandle())->disconnect();
+        } else {
+            logEvent("SEC", "Authentication complete. Connection is encrypted.");
+            isAuthenticationComplete = true;
+        }
     }
 };
 
-static void notifyCallback(BLERemoteCharacteristic* pBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
+
+
+static void notifyCallback(NimBLERemoteCharacteristic* pNimBLERemoteCharacteristic, uint8_t* pData, size_t length, bool isNotify) {
     for (size_t i = 0; i < length; i++) {
         char c = (char)pData[i];
         if (c == '>') {
@@ -98,52 +130,97 @@ static bool setHeader(const String& header) {
     return false;
 }
 
-bool connectOBD(BLEAdvertisedDevice* device) {
+bool connectOBD(NimBLEAdvertisedDevice* device) {
     if (!device) return false;
 
-    logObdEvent("CONN", "Connecting to OBD BLE Gateway: " + String(device->getName().c_str()));
+    logObdEvent("CONN", "Connecting to OBD NimBLE Gateway: " + String(device->getName().c_str()));
     
     if (pBleClient == nullptr) {
-        pBleClient = BLEDevice::createClient();
+        pBleClient = NimBLEDevice::createClient();
         pBleClient->setClientCallbacks(new MyClientCallback());
+        
+        // Use robust connection parameters from NimBLE examples
+        pBleClient->setConnectionParams(12, 12, 0, 150);
+        pBleClient->setConnectTimeout(5 * 1000);
+        
+        // Setup Security as per WiCAN docs
+        NimBLEDevice::setSecurityAuth(true, true, true);
     }
 
+    logEvent("CONN", "Connecting to OBD NimBLE Gateway: " + String(device->getName().c_str()));
     if (!pBleClient->connect(device)) {
-        logObdEvent("ERROR", "OBD BLE connection failed!");
+        logEvent("ERROR", "NimBLE connect failed");
         return false;
     }
 
-    logObdEvent("CONN", "BLE Connected. Finding Service...");
+    isAuthenticationComplete = false;
+    isAuthenticationFailed = false;
+
+    logEvent("CONN", "Waiting up to 5s for Security Handshake...");
+    for (int i = 0; i < 50; i++) {
+        if (isAuthenticationComplete || isAuthenticationFailed) {
+            break;
+        }
+        delay(100);
+    }
+
+    if (isAuthenticationFailed) {
+        logEvent("ERROR", "Authentication failed, aborting connection.");
+        pBleClient->disconnect();
+        return false;
+    }
+
+    logEvent("CONN", "Finding Service...");
+    // Disable Task WDT because GATT discovery on WiCAN takes > 5 seconds and blocks the loop
+    esp_task_wdt_delete(NULL);
+
+    // Print all discovered services to see what the WiCAN is actually serving
+    std::vector<NimBLERemoteService*> services = pBleClient->getServices(true);
+    for (auto pSvc : services) {
+        logEvent("DEBUG", "Found Service: " + String(pSvc->getUUID().toString().c_str()));
+    }
+
+    // Fetch the standard OBD Service FFF0
+    NimBLERemoteService* pRemoteService = pBleClient->getService(NimBLEUUID("FFF0"));
     
-    // Give the ESP32 standard BLE stack time to complete the background MTU handshake
-    delay(500);
-
-    BLERemoteService* pRemoteService = pBleClient->getService(BLEUUID(WICAN_BLE_SERVICE_UUID));
     if (pRemoteService == nullptr) {
-        logObdEvent("ERROR", "Failed to find FFF0 service.");
+        logEvent("ERROR", "Failed to find FFF0 Service.");
+        esp_task_wdt_add(NULL); // Re-enable before returning
+        pBleClient->disconnect();
+        return false;
+    }
+    
+    logEvent("DEBUG", "Successfully found FFF0 Service!");
+
+    // Print all characteristics of FFF0
+    std::vector<NimBLERemoteCharacteristic*> chars = pRemoteService->getCharacteristics(true);
+    for (auto pChar : chars) {
+        logEvent("DEBUG", "Found Char: " + String(pChar->getUUID().toString().c_str()));
+    }
+
+    esp_task_wdt_add(NULL); // Re-enable WDT after full discovery
+
+    // Dynamically find TX/RX characteristics based on WiCAN spec
+    pWriteChar = pRemoteService->getCharacteristic(NimBLEUUID("FFF2"));
+    pNotifyChar = pRemoteService->getCharacteristic(NimBLEUUID("FFF1"));
+
+    if (pWriteChar == nullptr || pNotifyChar == nullptr) {
+        logEvent("ERROR", "Failed to find Nordic UART Characteristics.");
         pBleClient->disconnect();
         return false;
     }
 
-    // Dynamically find TX/RX characteristics
-    pWriteChar = nullptr;
-    pNotifyChar = nullptr;
-    std::map<uint16_t, BLERemoteCharacteristic*>* pCharacteristics = pRemoteService->getCharacteristicsByHandle();
-    for (auto& elem : *pCharacteristics) {
-        BLERemoteCharacteristic* pChar = elem.second;
-        if (pChar->canWrite() || pChar->canWriteNoResponse()) pWriteChar = pChar;
-        if (pChar->canNotify()) pNotifyChar = pChar;
+    logEvent("CONN", "Found RX/TX chars. Registering notification...");
+    
+    if (pNotifyChar->canNotify()) {
+        pNotifyChar->subscribe(true, notifyCallback);
+    } else if (pNotifyChar->canIndicate()) {
+        pNotifyChar->subscribe(false, notifyCallback);
     }
 
-    if (!pWriteChar || !pNotifyChar) {
-        logObdEvent("ERROR", "Failed to find necessary characteristics.");
-        pBleClient->disconnect();
-        return false;
-    }
-
-    pNotifyChar->registerForNotify(notifyCallback);
-    logObdEvent("CONN", "Characteristics found and notifications registered. Running ELM327 init...");
-
+    logEvent("CONN", "Characteristics found and notifications registered. Running ELM327 init...");
+    
+    delay(500);
     currentHeader = ""; // Reset cached header
 
     // ELM327 Init Sequence
@@ -184,7 +261,7 @@ bool connectOBD(BLEAdvertisedDevice* device) {
 
 void disconnectOBD() {
     if (pBleClient && pBleClient->isConnected()) {
-        logObdEvent("CONN", "OBD session closed. BLE disconnected.");
+        logObdEvent("CONN", "OBD session closed. NimBLE disconnected.");
         pBleClient->disconnect();
     }
 }
@@ -199,7 +276,7 @@ void runOBDKeepAlive() {
         lastTesterPresent = now;
         String savedHeader = currentHeader;
         if (setHeader("7E5")) {
-            sendCommand("3E 80", 500);
+            sendCommand("3E");
         }
         if (savedHeader.length() > 0 && savedHeader != "7E5") {
             setHeader(savedHeader);

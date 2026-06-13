@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "config.h"
 
+
 extern void feedWDT(); // Access global hardware Watchdog feeder
 
 static bool bufferInitialized = false;
@@ -30,6 +31,37 @@ void initBuffer() {
 
 bool enqueueData(const TelemetryData& data) {
     if (!bufferInitialized) return false;
+
+    // Ring buffer logic: enforce limit
+    while (getQueueSize() >= MAX_QUEUE_FILES) {
+        // Find and delete the oldest file
+        File dir = LittleFS.open("/queue", "r");
+        if (dir && dir.isDirectory()) {
+            String oldestFile = "";
+            File file = dir.openNextFile();
+            while (file) {
+                if (!file.isDirectory()) {
+                    String name = file.name();
+                    if (name.endsWith(".json")) {
+                        if (oldestFile == "" || name < oldestFile) {
+                            oldestFile = name;
+                        }
+                    }
+                }
+                file = dir.openNextFile();
+            }
+            dir.close();
+            if (oldestFile != "") {
+                String path = "/queue/" + oldestFile;
+                LittleFS.remove(path);
+                logEvent("BUFFER", "Ring buffer full. Deleted oldest: " + path);
+            } else {
+                break; // Failsafe
+            }
+        } else {
+            break;
+        }
+    }
 
     // Construct a unique filename based on timestamp and millis to avoid collisions
     String filepath = "/queue/" + String(data.ts) + "_" + String(millis()) + ".json";
@@ -98,17 +130,17 @@ bool getNextQueuedFile(String& filepath, TelemetryData& data) {
                     continue;
                 }
 
-                // Populate data struct
-                data.soc = doc["soc"] | 0.0f;
-                data.volt = doc["volt"] | 0.0f;
-                data.temp = doc["temp"] | 0.0f;
-                data.range = doc["range"] | 0.0f;
-                data.power = doc["power"] | 0.0f;
-                data.odo = doc["odo"] | 0.0f;
-                data.service_days = doc["service_days"] | 0.0f;
-                data.service_km = doc["service_km"] | 0.0f;
-                data.bat_cap = doc["bat_cap"] | 0.0f;
-                data.tp_alarm = doc["tp_alarm"] | 0.0f;
+                // Populate data struct — preserve NaN for null/missing fields
+                data.soc = doc["soc"].is<float>() ? doc["soc"].as<float>() : NAN;
+                data.volt = doc["volt"].is<float>() ? doc["volt"].as<float>() : NAN;
+                data.temp = doc["temp"].is<float>() ? doc["temp"].as<float>() : NAN;
+                data.range = doc["range"].is<float>() ? doc["range"].as<float>() : NAN;
+                data.power = doc["power"].is<float>() ? doc["power"].as<float>() : NAN;
+                data.odo = doc["odo"].is<float>() ? doc["odo"].as<float>() : NAN;
+                data.service_days = doc["service_days"].is<float>() ? doc["service_days"].as<float>() : NAN;
+                data.service_km = doc["service_km"].is<float>() ? doc["service_km"].as<float>() : NAN;
+                data.bat_cap = doc["bat_cap"].is<float>() ? doc["bat_cap"].as<float>() : NAN;
+                data.tp_alarm = doc["tp_alarm"].is<float>() ? doc["tp_alarm"].as<float>() : NAN;
                 data.ts = doc["ts"] | 0U;
                 strlcpy(data.src, doc["src"] | "", sizeof(data.src));
 

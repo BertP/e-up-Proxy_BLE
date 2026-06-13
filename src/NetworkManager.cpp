@@ -2,13 +2,15 @@
 #include <PubSubClient.h>
 #include <Preferences.h>
 #include <ArduinoJson.h>
-#include <BLEDevice.h>
-#include <BLEScan.h>
+#include <NimBLEDevice.h>
+#include <NimBLEScan.h>
 #include "NetworkManager.h"
 #include "config.h"
 #include "logger.h"
 #include "buffer.h"
 #include "OBDManager.h"
+#include "esp_sleep.h"
+#include <esp_task_wdt.h>
 
 WiFiClient wifiClient;
 PubSubClient mqttClient(wifiClient);
@@ -37,9 +39,9 @@ extern void resetBootCrashCounter();
 extern void feedWDT();
 extern bool g_ntpSynchronized;
 
-static BLEScan* pBLEScan = nullptr;
+static NimBLEScan* pNimBLEScan = nullptr;
 static bool isBleScanning = false;
-static BLEAdvertisedDevice* foundWicanDevice = nullptr;
+static NimBLEAdvertisedDevice* foundWicanDevice = nullptr;
 
 static unsigned long wifiOnlineStartTime = 0;
 static bool isWifiScanning = false;
@@ -50,26 +52,35 @@ static unsigned long wifiConnectStartTime = 0;
 static String pendingSSID = "";
 static String pendingPass = "";
 
-static void onBleScanComplete(BLEScanResults foundDevices) {
-    for (int i = 0; i < foundDevices.getCount(); i++) {
-        BLEAdvertisedDevice dev = foundDevices.getDevice(i);
-        String name = dev.haveName() ? String(dev.getName().c_str()) : "";
-        if (name.startsWith(WICAN_BLE_PREFIX)) {
-            logEvent("SCAN", "Found WiCAN BLE: " + name + " (RSSI: " + String(dev.getRSSI()) + ")");
-            foundWicanDevice = new BLEAdvertisedDevice(dev);
-            break;
+class MyScanCallbacks : public NimBLEScanCallbacks {
+    void onResult(const NimBLEAdvertisedDevice* dev) override {
+        String name = dev->haveName() ? String(dev->getName().c_str()) : "";
+        if (name.startsWith(WICAN_BLE_PREFIX) && foundWicanDevice == nullptr) {
+            logEvent("SCAN", "Found WiCAN NimBLE: " + name + " (RSSI: " + String(dev->getRSSI()) + ")");
+            foundWicanDevice = new NimBLEAdvertisedDevice(*dev);
+            NimBLEDevice::getScan()->stop();
         }
     }
-    pBLEScan->clearResults();
-    isBleScanning = false;
-}
+
+    void onScanEnd(const NimBLEScanResults& results, int reason) override {
+        logEvent("SCAN", "Scan ended automatically.");
+        NimBLEDevice::getScan()->clearResults();
+        isBleScanning = false;
+    }
+};
+static MyScanCallbacks scanCallbacks;
 
 void initNetwork() {
-    BLEDevice::init("");
-    pBLEScan = BLEDevice::getScan();
-    pBLEScan->setActiveScan(true);
-    pBLEScan->setInterval(100);
-    pBLEScan->setWindow(99);
+    NimBLEDevice::init("");
+    NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM); // Generate a random MAC address to bypass stale bonding
+    NimBLEDevice::deleteAllBonds();
+    NimBLEDevice::setSecurityAuth(true, true, true);
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_KEYBOARD_ONLY);
+    pNimBLEScan = NimBLEDevice::getScan();
+    pNimBLEScan->setScanCallbacks(&scanCallbacks, false);
+    pNimBLEScan->setActiveScan(true);
+    pNimBLEScan->setInterval(100);
+    pNimBLEScan->setWindow(99);
 
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(true);
@@ -211,7 +222,7 @@ static void handleWiFiLogic() {
     }
 }
 
-static void handleBLELogic() {
+static void handleNimBLELogic() {
     if (obdActive) {
         runOBDKeepAlive();
         
@@ -230,8 +241,8 @@ static void handleBLELogic() {
 
     if (foundWicanDevice != nullptr) {
         // Safety: ensure scanner is fully stopped
-        pBLEScan->stop();
-        pBLEScan->clearResults();
+        pNimBLEScan->stop();
+        pNimBLEScan->clearResults();
         isBleScanning = false;
 
         delay(100); // Give the RF hardware a moment
@@ -249,14 +260,20 @@ static void handleBLELogic() {
         delete foundWicanDevice;
         foundWicanDevice = nullptr;
     } else if (!isBleScanning) {
-        // Only log sporadically to avoid spam
-        pBLEScan->start(BLE_SCAN_TIME_S, onBleScanComplete, false);
-        isBleScanning = true;
+        logEvent("SCAN", "Starting asynchronous BLE Scan for WiCAN (3s)...");
+        bool success = pNimBLEScan->start(3000, false);
+        if (success) {
+            isBleScanning = true;
+        } else {
+            logEvent("ERROR", "NimBLE scan start failed");
+            isBleScanning = false;
+            delay(1000);
+        }
     }
 }
 
 void runNetworkStateMachine() {
-    handleBLELogic();
+    handleNimBLELogic();
     handleWiFiLogic();
 }
 
@@ -374,6 +391,11 @@ void flushQueueToMQTT() {
     int flushCount = 0;
 
     while (getNextQueuedFile(filepath, data)) {
+        if (!mqttClient.connected()) {
+            logMqttEvent("ERROR", "MQTT connection lost during flush. Aborting.");
+            break;
+        }
+
         time_t correctedTs = data.ts;
         if (data.ts < 1000000000U) correctedTs = bootEpoch + data.ts;
 
@@ -404,6 +426,7 @@ void flushQueueToMQTT() {
         }
 
         feedWDT();
+        mqttClient.loop();
         delay(5);
     }
 
@@ -424,4 +447,76 @@ void flushQueueToMQTT() {
     logMqttEvent("MQTT", "Updating eup/lastSync: " + String(timeBuf));
     mqttClient.publish(MQTT_TOPIC_LASTSYNC, timeBuf, true);
     mqttFlushDone = true;
+}
+
+void initiateShutdownSequence() {
+    logEvent("SHUTDOWN", "Ignition OFF detected (GPIO 2 LOW). Starting shutdown sequence.");
+
+    // Disconnect BLE to free radio for WiFi
+    extern bool obdActive;
+    if (obdActive) {
+        disconnectOBD();
+        obdActive = false;
+    }
+
+    // Check if we have anything to flush
+    if (getQueueSize() > 0) {
+        logEvent("SHUTDOWN", "Queue has " + String(getQueueSize()) + " entries. Attempting WiFi flush...");
+
+        // Try SSID_1 first
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(HOME_SSID_1, HOME_PASS_1);
+        unsigned long start = millis();
+        bool connected = false;
+
+        while (millis() - start < 5000) {
+            if (WiFi.status() == WL_CONNECTED) {
+                connected = true;
+                break;
+            }
+            delay(100);
+            feedWDT();
+        }
+
+        // If SSID_1 failed, try SSID_2
+        if (!connected) {
+            logEvent("SHUTDOWN", "SSID_1 failed. Trying SSID_2...");
+            WiFi.disconnect(true);
+            delay(100);
+            WiFi.begin(HOME_SSID_2, HOME_PASS_2);
+            start = millis();
+            while (millis() - start < 5000) {
+                if (WiFi.status() == WL_CONNECTED) {
+                    connected = true;
+                    break;
+                }
+                delay(100);
+                feedWDT();
+            }
+        }
+
+        if (connected) {
+            logEvent("SHUTDOWN", "WiFi connected to " + WiFi.SSID() + ". Flushing queue...");
+            flushQueueToMQTT();
+        } else {
+            logEvent("SHUTDOWN", "No WiFi reachable. Data preserved in LittleFS for next boot.");
+        }
+    } else {
+        logEvent("SHUTDOWN", "Queue is empty. No flush needed.");
+    }
+
+    logEvent("SHUTDOWN", "Entering Deep Sleep. Wakeup on GPIO 2 HIGH.");
+
+    // Cleanly remove watchdog before sleeping
+    esp_task_wdt_delete(NULL);
+
+    // Disconnect WiFi to save power
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+
+    // ESP32-C6 GPIO Wakeup Configuration
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << 2, ESP_GPIO_WAKEUP_GPIO_HIGH);
+
+    delay(200); // Give UART some time to flush
+    esp_deep_sleep_start();
 }

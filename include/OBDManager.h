@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include "buffer.h"
 
-#include <BLEDevice.h>
+#include <NimBLEDevice.h>
 
 // Initialize the OBD2 BLE client connection
 bool connectOBD(BLEAdvertisedDevice* device);

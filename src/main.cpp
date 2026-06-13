@@ -162,6 +162,14 @@ void fetchOBDMetrics(bool forceSlow) {
         }
     }
 
+    static unsigned long lastEmptyPayloadTime = 0;
+    unsigned long now = millis();
+    if (now - lastEmptyPayloadTime < 300000 && lastEmptyPayloadTime != 0) {
+        logObdEvent("CONN", "OBD is offline, but empty payload was already generated recently. Skipping.");
+        return;
+    }
+    lastEmptyPayloadTime = now;
+
     logObdEvent("CONN", "OBD is offline. Generating real board voltage empty payload...");
     generateEmptyRealTelemetry(latestCachedData);
 
@@ -191,6 +199,7 @@ void setup() {
     digitalWrite(14, LOW); 
 
     pinMode(LED_PIN, OUTPUT);
+    pinMode(IGNITION_PIN, INPUT_PULLUP);
     setLED(false);
 
     initLogger();
@@ -210,6 +219,17 @@ void setup() {
 
 void loop() {
     feedWDT();
+
+    // Ignition OFF detection (skip first 10s after boot to allow USB debugging)
+    if (millis() > 10000) {
+        if (digitalRead(IGNITION_PIN) == LOW) {
+            delay(100); // Debounce
+            if (digitalRead(IGNITION_PIN) == LOW) {
+                initiateShutdownSequence();
+            }
+        }
+    }
+
     updateLED();
 
     if (!stateMachineInitLogged && millis() > 10000) {
@@ -218,6 +238,12 @@ void loop() {
     }
 
     runNetworkStateMachine();
+
+    static unsigned long lastAlive = 0;
+    if (millis() - lastAlive > 60000) {
+        lastAlive = millis();
+        logEvent("DEBUG", "System alive. Uptime: " + String(millis() / 1000) + "s, Free heap: " + String(ESP.getFreeHeap()) + "B");
+    }
 
     delay(1);
 }

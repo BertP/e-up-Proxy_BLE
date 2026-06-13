@@ -132,26 +132,6 @@ Each section in `SPEC.md` has a stable ID (`SPEC-01` through `SPEC-06`). When a 
 - **Primary Toolchain:** WSL2 (Ubuntu) — all build operations run natively inside WSL2 for maximum filesystem performance.
   - *FileSystem Performance warning:* Running Windows PlatformIO (`pio`) on files residing inside the WSL2 network share (`\\wsl.localhost\...`) is extremely slow due to the 9P virtual network protocol overhead. Always compile inside WSL2 using the WSL terminal.
 - **Project location:** Inside the WSL2 filesystem (e.g. `~/projects/e-up!Proxy`).
-- **OTA Flashing Network Dynamics (NAT vs. Bridged Mode):**
-  - *WSL NAT Mode (Default):* In default NAT mode, the ESP32 cannot route connections back to the WSL virtual IP (which is behind a NAT). OTA uploads triggered from within WSL will fail with `No response from device` after authentication.
-  - *WSL Bridged Mode:* If WSL is explicitly configured in "bridged mode", it obtains a direct IP address in the local subnet (e.g., `192.168.1.x`), allowing the ESP32 to communicate with it.
-  - *Recommended Fallback:* If bridged mode is not active or experiencing routing issues, copy the compiled `.bin` file to the Windows host and run `espota.py` natively from Windows PowerShell to ensure direct IP-to-IP local connection.
-
-### ⚠️ CRITICAL OTA SOFTWARE & HARDWARE CONSTRAINTS (OTA Lock Prevention)
-To prevent creating an "OTA Lock" (where the device crashes and becomes impossible to flash over the air), these rules must be strictly obeyed in the code:
-
-1. **NO Flash/LittleFS Writes in OTA Callbacks:**
-   - *Hardware Conflict:* Accessing the filesystem (such as calling `logEvent` which opens/writes to `/debug.log` on LittleFS) inside `ArduinoOTA` callbacks (`onStart`, `onEnd`, `onError`) is strictly forbidden. 
-   - *Crash Mechanism:* While the flash controller is locked/in-use for writing the incoming application binary, any concurrent flash write attempt to LittleFS triggers a severe hardware cache/exception error, causing the ESP32 to crash instantly.
-   - *Rule:* Only use direct serial output (`Serial.println` or `Serial.printf`) inside all `ArduinoOTA` callbacks.
-
-2. **Watchdog Fütterung (WDT Feed during OTA):**
-   - Writing 1.1MB of firmware to flash takes more than 30 seconds. Without feeding the watchdog, the hardware watchdog timer (`WDT_TIMEOUT_S 30`) will trigger a system reset.
-   - *Rule:* Always register the `ArduinoOTA.onProgress` callback and call `feedWDT()` inside it to continuously keep the watchdog fed during the flash write.
-
-3. **Block Network Disconnections during OTA:**
-   - The state machine's periodic Wi-Fi rescan checks (e.g., every 5 minutes) must be blocked while an OTA upload is in progress.
-   - *Rule:* Use a safeguard flag (`otaInProgress`) set in `onStart` (and cleared in `onError`) to ignore any scan timers or transition requests that would otherwise disconnect the Wi-Fi.
 
 ### USB Hardware
 - **Device:** CH9102 USB-to-Serial adapter (VID `1a86`, PID `55d4`), forwarded from Windows to WSL2 via `usbipd`.
@@ -178,9 +158,6 @@ bash -l -c "pio run"
 This is the sole compile step. Do not invoke `arduino-cli`, `make`, `cmake`, or any other build tool. Do NOT run `pio run` without the `bash -l` wrapper — it will fail with `command not found`.
 
 ### Flash Procedure — STRICT PROTOCOL
-
-> [!IMPORTANT]
-> **Priority Rule:** If the ESP32 is physically connected or available via USB (CH9102 Serial device `/dev/ttyACM0` present), **USB Serial Flashing ALWAYS takes precedence and priority over OTA Flashing.** OTA should only be used when the device is deployed remotely and USB is unavailable.
 
 > ⚠️ The ESP32 is not permanently connected. Always verify the device before flashing.
 

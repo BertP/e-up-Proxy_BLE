@@ -256,8 +256,11 @@ bool connectOBD(NimBLEAdvertisedDevice* device) {
         if (clean.indexOf("5003") >= 0) {
             logObdEvent("CONN", "UDS extended session opened on 7E5.");
             
-            // Also try to open session on 7E0 for Odometer / Service data
+            // Also try to open session on 7E0 and 714
             if (setHeader("7E0")) {
+                sendCommand("10 03");
+            }
+            if (setHeader("714")) {
                 sendCommand("10 03");
             }
             
@@ -465,12 +468,8 @@ bool queryGroupB(TelemetryData& data) {
     bool hasSomeData = false;
 
     float odoVal = 0.0f;
-    // Try Instrument Cluster (714) first using standard VW ODO DID 02 BD
-    if (queryUDS3Bytes("714", "02 BD", odoVal, 0.01f, 0.0f)) {
-        data.odo = odoVal;
-        hasSomeData = true;
-    // Fallback: Try Battery ECU (7E5)
-    } else if (queryUDS3Bytes("7E5", "02 BD", odoVal, 0.01f, 0.0f)) {
+    // Instrument Cluster (714) using standard VW ODO DID 02 BD
+    if (queryUDS3Bytes("714", "02 BD", odoVal, 1.0f, 0.0f)) {
         data.odo = odoVal;
         hasSomeData = true;
     } else {

@@ -123,6 +123,11 @@ static bool setHeader(const String& header) {
 
     if (clean.equalsIgnoreCase("OK") || clean.indexOf("OK") >= 0 || clean.length() == 0) {
         currentHeader = header;
+        if (header == "7E5") {
+            sendCommand("AT CRA 7ED");
+        } else if (header == "7E0") {
+            sendCommand("AT CRA 7E8");
+        }
         return true;
     }
 
@@ -276,7 +281,7 @@ void runOBDKeepAlive() {
         lastTesterPresent = now;
         String savedHeader = currentHeader;
         if (setHeader("7E5")) {
-            sendCommand("3E");
+            sendCommand("3E 00");
         }
         if (savedHeader.length() > 0 && savedHeader != "7E5") {
             setHeader(savedHeader);

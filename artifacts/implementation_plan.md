@@ -1,70 +1,26 @@
-# Implementation Plan: BLE Architecture Migration (3.0.0-BLE)
+# Implementierungsplan: Fix OBD UDS Kommunikation
 
-## Goal Description
-The project specification (`SPEC.md`) was recently updated to version 3.0.0-BLE, dictating a major architecture shift: the proxy must now communicate with the WiCAN OBD2 dongle via Bluetooth Low Energy (BLE GATT) instead of the previous TCP/WiFi socket. 
+Das Symptom "nur die Bordspannung wurde aufgezeichnet" bedeutet, dass die Proxy-Software bei allen "echten" Fahrzeugabfragen (SOC, Temp, etc.) scheitert und auf ein reines Spannungs-Fallback umschaltet. 
 
-Currently, the codebase (`OBDManager.cpp` and `NetworkManager.cpp`) still relies on `WiFiClient` and port 35000. This plan outlines the necessary refactoring to align the codebase with `SPEC-01` and `SPEC-04`.
-
-## User Review Required
-> [!IMPORTANT]
-> This is a major rewrite of the core connectivity and OBD managers. Please confirm if we should proceed with this migration now.
-
-## Open Questions
-> [!WARNING]
-> 1. In `SPEC-01`, it says the BLE device name prefix is `WiC_`. Should we dynamically discover the rest of the MAC/Name or just connect to the first device matching this prefix?
-> 2. Do we have the precise UUIDs for the RX and TX characteristics of the `FFF0` service? (Usually `FFF1` and `FFF2`, but we need to be sure).
+## Ursachen-Analyse
+Wenn die Bordspannung (AT RV) erfolgreich gelesen wird, die UDS-Abfragen aber fehlschlagen, gibt es drei primäre Fehlerquellen:
+1. **CAN-Filter (CRA):** Der WiCAN-Dongle ignoriert möglicherweise die Antworten des Autos, weil der Empfangsfilter (CAN Receive Address) beim Wechseln des Headers (`AT SH`) nicht automatisch angepasst wird.
+2. **Tester Present:** Unser vorheriger Fix auf `3E` ist ungültig nach UDS-Standard, es muss `3E 00` (Tester Present mit positiver Antwort) heißen. Ein ungültiges `3E` führt zu einem Fehler im Steuergerät (NRC), wodurch die Diagnose-Sitzung sofort wieder beendet wird.
 
 ## Proposed Changes
 
-### `include/config.h`
-- Add BLE configuration constants (Service UUID `FFF0`, device name prefix `WiC_`).
-- Adjust state machine state definitions if necessary to reflect `OPERATIONAL_BUFFERING` (BLE only) and `OPERATIONAL_ONLINE` (Wi-Fi + BLE).
+### `src/OBDManager.cpp`
+- **[MODIFY]** `setHeader()`: Wir fügen einen expliziten Befehl `AT CRA` (CAN Receive Address) hinzu. Wenn wir an `7E5` senden, weisen wir den Dongle explizit an, auf `7ED` zu lauschen. Bei `7E0` auf `7E8`.
+- **[MODIFY]** `runOBDKeepAlive()`: Wir ändern den Befehl von `3E` auf den sauberen Standardbefehl `3E 00`. So antwortet das Auto positiv, der Dongle blockiert nicht, und das Steuergerät bricht die Diagnose-Sitzung nicht ab.
 
----
+## Open Questions / User Review Required
 
-### `src/NetworkManager.cpp` & `include/NetworkManager.h`
-- Modify the state machine to support concurrent BLE and Wi-Fi connections as per `SPEC-01`.
-- Implement non-blocking BLE scanning alongside Wi-Fi connecting.
-- Manage the 10-minute Wi-Fi shutdown timer and trigger Wi-Fi wakeups when LittleFS buffer has data.
-
-#### [MODIFY] NetworkManager.cpp
-#### [MODIFY] NetworkManager.h
-
----
-
-### `src/OBDManager.cpp` & `include/OBDManager.h`
-- Remove `WiFiClient obdClient`.
-- Implement `BLEClient` and connect to the `FFF0` service.
-- Subscribe to the TX characteristic for notifications.
-- Replace the blocking `sendCommand` TCP read loop with an asynchronous/notification-based BLE read mechanism.
-- Ensure the ELM327 initialization and UDS Session Keep-Alive (`3E 80`) are correctly routed over BLE.
-
-#### [MODIFY] OBDManager.cpp
-#### [MODIFY] OBDManager.h
-
----
-
-### `src/main.cpp`
-- Remove the temporary BLE scanner testing code.
-- Ensure `BLEDevice::init()` is called appropriately before NetworkManager starts.
-
-#### [MODIFY] main.cpp
-
----
-
-### Documentation
-- Update `README.md` to reflect the new BLE architecture, removing mentions of TCP Port 35000.
-- Update `CHANGELOG.md` with the new version.
-
-#### [MODIFY] README.md
-#### [MODIFY] CHANGELOG.md
-
-## Verification Plan
-
-### Automated Tests
-- Run `bash -l -c "pio run"` to ensure the project compiles cleanly after substituting TCP for BLE.
-- Update native mocks (`pio test -e native`) if they depend on `WiFiClient`.
-
-### Manual Verification
-- Ask the user to compile and flash via USB or OTA.
-- Verify through serial monitor that BLE device is found and connected.
+> [!IMPORTANT]
+> **Bevor ich den Code anpasse, brauche ich idealerweise die Fehlerprotokolle vom Dongle!**
+> 
+> Da dein Proxy aktuell wieder im WLAN sein sollte, öffne bitte deinen Browser und rufe folgende URL auf:
+> `http://<IP-DEINES-PROXYS>/obd`
+> 
+> Bitte kopiere den Text, der dort angezeigt wird, und füge ihn hier im Chat ein. Daran können wir zu 100% genau sehen, mit welchem Fehlercode das Auto die Abfragen ablehnt oder ob der Dongle "NO DATA" meldet.
+>
+> Falls du gerade keinen Zugriff auf die Logs hast, kannst du mir auch einfach das Go geben, und ich setze den Fix auf Verdacht um!

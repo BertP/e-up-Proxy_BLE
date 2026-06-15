@@ -466,11 +466,11 @@ bool queryGroupB(TelemetryData& data) {
 
     float odoVal = 0.0f;
     // Try Instrument Cluster (714) first using standard VW ODO DID 02 BD
-    if (queryUDS3Bytes("714", "02 BD", odoVal, 1.0f, 0.0f)) {
+    if (queryUDS3Bytes("714", "02 BD", odoVal, 0.01f, 0.0f)) {
         data.odo = odoVal;
         hasSomeData = true;
     // Fallback: Try Battery ECU (7E5)
-    } else if (queryUDS3Bytes("7E5", "02 BD", odoVal, 1.0f, 0.0f)) {
+    } else if (queryUDS3Bytes("7E5", "02 BD", odoVal, 0.01f, 0.0f)) {
         data.odo = odoVal;
         hasSomeData = true;
     } else {

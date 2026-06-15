@@ -378,10 +378,14 @@ static bool queryUDS3Bytes(const String& header, const String& did, float& outVa
 }
 
 static void deriveRange(TelemetryData& data) {
-    if (std::isnan(data.bat_cap) || std::isnan(data.soc)) {
+    if (std::isnan(data.soc)) {
         data.range = NAN;
         return;
     }
+    
+    // Fallback capacity to 61.5 Ah (approx 32.3 kWh net) if the ECU 7E5 rejects the bat_cap query
+    float cap = std::isnan(data.bat_cap) ? 61.5f : data.bat_cap;
+
     float range_coefficient = 5.5f; // Standard warm temperature coefficient
     if (!std::isnan(data.temp)) {
         if (data.temp <= 0.0f) {
@@ -390,7 +394,7 @@ static void deriveRange(TelemetryData& data) {
             range_coefficient = 4.5f; // Cold temperature coefficient
         }
     }
-    data.range = data.bat_cap * (data.soc / 100.0f) * range_coefficient;
+    data.range = cap * (data.soc / 100.0f) * range_coefficient;
 }
 
 bool queryGroupA(TelemetryData& data) {

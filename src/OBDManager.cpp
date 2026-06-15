@@ -253,6 +253,12 @@ bool connectOBD(NimBLEAdvertisedDevice* device) {
         String clean = stripWhitespace(resp);
         if (clean.indexOf("5003") >= 0) {
             logObdEvent("CONN", "UDS extended session opened on 7E5.");
+            
+            // Also try to open session on 7E0 for Odometer / Service data
+            if (setHeader("7E0")) {
+                sendCommand("10 03");
+            }
+            
             lastTesterPresent = millis();
             return true;
         } else {

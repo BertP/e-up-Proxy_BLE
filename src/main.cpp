@@ -142,7 +142,7 @@ void fetchOBDMetrics(bool forceSlow) {
             groupBOk = queryGroupB(latestCachedData);
         }
 
-        if (groupAOk && groupBOk) {
+        if (groupAOk) {
             latestCachedData.ts = time(nullptr);
             strlcpy(latestCachedData.src, "CAR_BUFFERED", sizeof(latestCachedData.src));
 
